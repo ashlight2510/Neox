@@ -75,6 +75,7 @@
       text-shadow: 0 0 12px rgba(6, 182, 212, 0.8);
     }
     .hud .score { color: #22d3ee; }
+    .hud .gold { color: #fbbf24; text-shadow: 0 0 10px rgba(251, 191, 36, 0.6); }
     .hud .wave { color: #a78bfa; text-shadow: 0 0 12px rgba(167, 139, 250, 0.8); }
     .hud .lives { color: #f472b6; }
     .overlay {
@@ -141,6 +142,38 @@
       margin-bottom: 20px;
       text-shadow: 0 0 16px rgba(34, 211, 238, 0.8);
     }
+    .shop { padding: 16px; max-height: 85vh; overflow-y: auto; }
+    .shop h2 { font-size: 1rem; margin: 0 0 8px; color: #a78bfa; }
+    .shop .gold-display { font-size: 1.1rem; color: #fbbf24; margin-bottom: 16px; font-weight: 700; }
+    .shop-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 10px 14px;
+      margin-bottom: 8px;
+      background: rgba(30, 30, 40, 0.8);
+      border-radius: 10px;
+      border: 1px solid rgba(167, 139, 250, 0.25);
+    }
+    .shop-item .info { flex: 1; font-size: 12px; color: #94a3b8; }
+    .shop-item .name { font-weight: 700; color: #e2e8f0; margin-bottom: 2px; }
+    .shop-item .btn-buy {
+      padding: 8px 14px;
+      border: none;
+      border-radius: 8px;
+      font-family: inherit;
+      font-size: 11px;
+      font-weight: 700;
+      cursor: pointer;
+      background: linear-gradient(135deg, #a78bfa, #8b5cf6);
+      color: #0a0a12;
+      white-space: nowrap;
+    }
+    .shop-item .btn-buy:hover { filter: brightness(1.15); }
+    .shop-item .btn-buy:disabled { opacity: 0.5; cursor: not-allowed; filter: none; }
+    .shop-item .lvl { font-size: 10px; color: #64748b; margin-top: 2px; }
+    .shop .btn-next { margin-top: 16px; }
   </style>
 </head>
 <body>
@@ -149,19 +182,28 @@
     <div class="scanlines"></div>
     <div class="hud">
       <span class="score">SCORE <b id="scoreNum">0</b></span>
+      <span class="gold">🪙 <b id="goldNum">0</b></span>
       <span class="wave">WAVE <b id="waveNum">1</b></span>
       <span class="lives">♥ <b id="livesNum">3</b></span>
     </div>
     <div id="startOverlay" class="overlay">
       <div class="kicker">NEON ARCADE</div>
       <h1>NEOX</h1>
-      <p>← → 이동 · SPACE 발사<br />웨이브 클리어, 적 격추로 점수 UP</p>
+      <p>← → 이동 · SPACE 발사<br />웨이브 클리어 시 골드 · 5라운드마다 상점</p>
       <button class="btn" id="startBtn">START</button>
     </div>
     <div id="gameOverOverlay" class="overlay game-over hidden">
       <div class="kicker">GAME OVER</div>
       <div class="final-score">SCORE <b id="finalScore">0</b></div>
       <button class="btn" id="restartBtn">RETRY</button>
+    </div>
+    <div id="shopOverlay" class="overlay hidden">
+      <div class="shop">
+        <h2 id="shopTitle">상점 · WAVE 5 클리어!</h2>
+        <div class="gold-display">🪙 <b id="shopGold">0</b> GOLD</div>
+        <div id="shopList"></div>
+        <button class="btn btn-next" id="shopNextBtn">다음 웨이브</button>
+      </div>
     </div>
   </div>
 
@@ -172,10 +214,16 @@
   const C = document.getElementById('c');
   const ctx = C.getContext('2d');
   const scoreEl = document.getElementById('scoreNum');
+  const goldEl = document.getElementById('goldNum');
   const waveEl = document.getElementById('waveNum');
   const livesEl = document.getElementById('livesNum');
   const startOverlay = document.getElementById('startOverlay');
   const gameOverOverlay = document.getElementById('gameOverOverlay');
+  const shopOverlay = document.getElementById('shopOverlay');
+  const shopTitle = document.getElementById('shopTitle');
+  const shopGold = document.getElementById('shopGold');
+  const shopList = document.getElementById('shopList');
+  const shopNextBtn = document.getElementById('shopNextBtn');
   const finalScoreEl = document.getElementById('finalScore');
   const startBtn = document.getElementById('startBtn');
   const restartBtn = document.getElementById('restartBtn');
@@ -196,31 +244,49 @@
   const CS = {
     PLAYER_W: 24,
     PLAYER_H: 20,
-    PLAYER_SPEED: 6,
-    BULLET_SPEED: -12,
+    PLAYER_SPEED: 5.5,
+    BULLET_SPEED: -10,
     BULLET_R: 3,
     ENEMY_W: 22,
     ENEMY_H: 18,
     ENEMY_COLS: 8,
     ENEMY_ROWS: 3,
     ENEMY_GAP: 8,
-    ENEMY_DX: 2,
-    ENEMY_DY: 16,
+    ENEMY_DX: 1.8,
+    ENEMY_DY: 14,
     PARTICLE_COUNT: 8,
+    MISSILE_SPEED: 2.2,
+    MISSILE_R: 4,
+    MISSILE_HOMING: 0.06,
+    MISSILE_TRACKING_MS: 300,
+    DIVE_SPEED: 3,
+    DIVE_HOMING: 0.038,
+    ENEMY_SHOOT_INTERVAL: 2400,
+    ENEMY_DIVE_INTERVAL: 4800,
+    INVINCIBLE_MS: 1800,
+    GOLD_PER_WAVE: 28,
+    GOLD_WAVE_BONUS: 10,
   };
 
   let state = 'idle';
   let player = { x: 0, y: 0 };
   let bullets = [];
   let enemies = [];
+  let enemyMissiles = [];
   let particles = [];
   let score = 0;
+  let gold = 0;
   let wave = 1;
   let lives = 3;
+  let maxLives = 5;
+  let upgrades = { fireRate: 0, bulletSpeed: 0, moveSpeed: 0 };
   let enemyDir = 1;
   let enemyTick = 0;
   let lastFrame = 0;
   let lastShot = 0;
+  let lastEnemyShoot = 0;
+  let lastDiveSpawn = 0;
+  let invincibleUntil = 0;
   let raf = 0;
   const stars = [];
   for (let i = 0; i < 80; i++) {
@@ -234,6 +300,7 @@
 
   function spawnWave() {
     enemies = [];
+    enemyMissiles = [];
     const baseX = (W - (CS.ENEMY_COLS * (CS.ENEMY_W + CS.ENEMY_GAP) - CS.ENEMY_GAP)) / 2 + (CS.ENEMY_W + CS.ENEMY_GAP) / 2;
     const baseY = 60;
     for (let row = 0; row < CS.ENEMY_ROWS + Math.min(wave - 1, 2); row++) {
@@ -243,6 +310,9 @@
           y: baseY + row * (CS.ENEMY_H + CS.ENEMY_GAP),
           type: row % 3,
           hit: false,
+          diving: false,
+          vx: 0,
+          vy: 0,
         });
       }
     }
@@ -268,14 +338,16 @@
     return a.x < b.x + bw && a.x + aw > b.x && a.y < b.y + bh && a.y + ah > b.y;
   }
 
-  function drawPlayer() {
+  function drawPlayer(t) {
     const x = player.x - CS.PLAYER_W / 2;
     const y = player.y - CS.PLAYER_H / 2;
     const w = CS.PLAYER_W;
     const h = CS.PLAYER_H;
+    const inv = t < invincibleUntil;
+    if (inv && Math.floor(t / 80) % 2 === 0) return;
     ctx.save();
-    ctx.shadowColor = '#06b6d4';
-    ctx.shadowBlur = 14;
+    ctx.shadowColor = inv ? '#f472b6' : '#06b6d4';
+    ctx.shadowBlur = inv ? 20 : 14;
     ctx.fillStyle = '#06b6d4';
     ctx.beginPath();
     ctx.moveTo(x, y + h);
@@ -309,13 +381,34 @@
     const colors = ['#a78bfa', '#c084fc', '#f472b6'];
     const c = colors[e.type % colors.length];
     ctx.save();
-    ctx.shadowColor = c;
-    ctx.shadowBlur = 10;
-    ctx.fillStyle = c;
+    if (e.diving) {
+      ctx.shadowColor = '#f472b6';
+      ctx.shadowBlur = 16;
+      ctx.globalAlpha = 0.9 + Math.sin(performance.now() * 0.01) * 0.1;
+    } else {
+      ctx.shadowColor = c;
+      ctx.shadowBlur = 10;
+    }
+    ctx.fillStyle = e.diving ? '#f472b6' : c;
     ctx.fillRect(e.x - CS.ENEMY_W / 2, e.y - CS.ENEMY_H / 2, CS.ENEMY_W, CS.ENEMY_H);
     ctx.strokeStyle = 'rgba(255,255,255,0.5)';
     ctx.lineWidth = 1;
     ctx.strokeRect(e.x - CS.ENEMY_W / 2, e.y - CS.ENEMY_H / 2, CS.ENEMY_W, CS.ENEMY_H);
+    ctx.globalAlpha = 1;
+    ctx.restore();
+  }
+
+  function drawEnemyMissile(m) {
+    ctx.save();
+    ctx.shadowColor = '#f472b6';
+    ctx.shadowBlur = 12;
+    ctx.fillStyle = '#f472b6';
+    ctx.beginPath();
+    ctx.ellipse(m.x, m.y, CS.MISSILE_R * 0.6, CS.MISSILE_R, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,0.6)';
+    ctx.lineWidth = 1;
+    ctx.stroke();
     ctx.restore();
   }
 
@@ -335,8 +428,86 @@
 
   function updateHud() {
     scoreEl.textContent = score;
+    goldEl.textContent = gold;
     waveEl.textContent = wave;
     livesEl.textContent = lives;
+  }
+
+  function effectiveFireRate() {
+    return 4 + upgrades.fireRate;
+  }
+  function effectiveBulletSpeed() {
+    return CS.BULLET_SPEED * (1 + 0.22 * upgrades.bulletSpeed);
+  }
+  function effectiveMoveSpeed() {
+    return CS.PLAYER_SPEED * (1 + 0.15 * upgrades.moveSpeed);
+  }
+
+  const SHOP_ITEMS = [
+    { id: 'fireRate', name: '연사 속도', desc: '초당 발사 수 +1', max: 3, prices: [55, 85, 115] },
+    { id: 'bulletSpeed', name: '미사일 업그레이드', desc: '탄속 +22%', max: 2, prices: [70, 95] },
+    { id: 'moveSpeed', name: '이동 속도', desc: '이동 +15%', max: 2, prices: [60, 85] },
+    { id: 'heal', name: '체력 회복', desc: '체력 +1 (최대 5)', max: 99, prices: [90] },
+  ];
+
+  function renderShop() {
+    shopTitle.textContent = '상점 · WAVE ' + (wave - 1) + ' 클리어!';
+    shopGold.textContent = gold;
+    shopList.innerHTML = '';
+    SHOP_ITEMS.forEach(item => {
+      const div = document.createElement('div');
+      div.className = 'shop-item';
+      const lvl = item.id === 'heal' ? 0 : upgrades[item.id];
+      const max = item.id === 'heal' ? '' : ' / ' + item.max;
+      const price = item.id === 'heal' ? item.prices[0] : (item.prices[lvl] ?? 999);
+      const canBuy = gold >= price && (item.id === 'heal' ? lives < maxLives : lvl < item.max);
+      const name = item.id === 'heal' ? item.name : item.name + ' Lv.' + (lvl + 1);
+      div.innerHTML =
+        '<div class="info">' +
+          '<div class="name">' + name + '</div>' +
+          '<div class="lvl">' + item.desc + (item.id !== 'heal' && lvl > 0 ? ' · Lv.' + lvl + max : '') + '</div>' +
+        '</div>' +
+        '<button class="btn-buy" data-id="' + item.id + '" ' + (canBuy ? '' : 'disabled') + '>' +
+          (item.id === 'heal' && lives >= maxLives ? 'MAX' : (canBuy ? price + ' G' : '—')) +
+        '</button>';
+      shopList.appendChild(div);
+    });
+    shopList.querySelectorAll('.btn-buy').forEach(btn => {
+      if (btn.disabled) return;
+      btn.addEventListener('click', () => buyUpgrade(btn.dataset.id));
+    });
+  }
+
+  function buyUpgrade(id) {
+    const item = SHOP_ITEMS.find(i => i.id === id);
+    if (!item) return;
+    if (id === 'heal') {
+      if (lives >= maxLives || gold < item.prices[0]) return;
+      gold -= item.prices[0];
+      lives = Math.min(maxLives, lives + 1);
+    } else {
+      const lvl = upgrades[id];
+      if (lvl >= item.max || gold < (item.prices[lvl] ?? 999)) return;
+      gold -= item.prices[lvl];
+      upgrades[id]++;
+    }
+    renderShop();
+    updateHud();
+  }
+
+  function openShop() {
+    state = 'shop';
+    updateHud();
+    renderShop();
+    shopOverlay.classList.remove('hidden');
+  }
+
+  function closeShopAndNextWave() {
+    shopOverlay.classList.add('hidden');
+    state = 'play';
+    spawnWave();
+    lastEnemyShoot = lastDiveSpawn = performance.now();
+    raf = requestAnimationFrame(loop);
   }
 
   function gameOver() {
@@ -379,33 +550,106 @@
     }
     ctx.restore();
 
-    const spd = CS.PLAYER_SPEED * 60 * dt;
+    const spd = effectiveMoveSpeed() * 60 * dt;
     if (keys['ArrowLeft'] || touchBtns.left) player.x -= spd;
     if (keys['ArrowRight'] || touchBtns.right) player.x += spd;
     if (keys['Space'] || touchBtns.fire) tryShoot();
     player.x = Math.max(CS.PLAYER_W / 2, Math.min(W - CS.PLAYER_W / 2, player.x));
 
-    bullets.forEach(b => { b.y += BULLET_SPEED * 60 * dt; });
+    const bSpeed = effectiveBulletSpeed();
+    bullets.forEach(b => { b.y += bSpeed * 60 * dt; });
     bullets = bullets.filter(b => b.y > -10);
 
     const alive = enemies.filter(e => !e.hit);
+    const formation = alive.filter(e => !e.diving);
+
     if (alive.length === 0) {
+      const cleared = wave;
+      gold += CS.GOLD_PER_WAVE + cleared * CS.GOLD_WAVE_BONUS;
+      score += 400 + cleared * 50;
       wave++;
-      score += 500;
+      if (wave % 5 === 1) {
+        drawPlayer(now);
+        bullets.forEach(drawBullet);
+        enemyMissiles.forEach(drawEnemyMissile);
+        enemies.forEach(drawEnemy);
+        drawParticles();
+        openShop();
+        return;
+      }
       spawnWave();
     }
+
+    const shootInterval = Math.max(1200, CS.ENEMY_SHOOT_INTERVAL - (wave - 1) * 50);
+    if (formation.length > 0 && now - lastEnemyShoot >= shootInterval) {
+      lastEnemyShoot = now;
+      const shooter = formation[Math.floor(Math.random() * formation.length)];
+      const dx = (player.x - shooter.x) * 0.002;
+      enemyMissiles.push({
+        x: shooter.x,
+        y: shooter.y + CS.ENEMY_H / 2,
+        vx: Math.max(-1.2, Math.min(1.2, dx)),
+        vy: CS.MISSILE_SPEED,
+        spawnedAt: now,
+      });
+    }
+
+    const diveInterval = Math.max(2800, CS.ENEMY_DIVE_INTERVAL - (wave - 1) * 120);
+    const diveCands = formation.filter(e => !e.diving);
+    if (diveCands.length > 0 && now - lastDiveSpawn >= diveInterval) {
+      lastDiveSpawn = now;
+      const d = diveCands[Math.floor(Math.random() * diveCands.length)];
+      d.diving = true;
+      const dx = player.x - d.x;
+      const dy = player.y - d.y;
+      const len = Math.hypot(dx, dy) || 1;
+      d.vx = (dx / len) * CS.DIVE_SPEED;
+      d.vy = (dy / len) * CS.DIVE_SPEED;
+    }
+
+    enemyMissiles.forEach(m => {
+      const age = now - (m.spawnedAt || 0);
+      const tracking = age < CS.MISSILE_TRACKING_MS;
+      if (tracking) {
+        const dx = player.x - m.x;
+        const dy = player.y - m.y;
+        const len = Math.hypot(dx, dy) || 1;
+        m.vx += (dx / len) * CS.MISSILE_HOMING * 60 * dt;
+        m.vy += (dy / len) * CS.MISSILE_HOMING * 60 * dt;
+        const ml = Math.hypot(m.vx, m.vy) || 1;
+        m.vx = (m.vx / ml) * CS.MISSILE_SPEED;
+        m.vy = (m.vy / ml) * CS.MISSILE_SPEED;
+      }
+      m.x += m.vx * 60 * dt;
+      m.y += m.vy * 60 * dt;
+    });
+    enemyMissiles = enemyMissiles.filter(m => m.y < H + 20);
+
+    alive.filter(e => e.diving).forEach(e => {
+      const dx = player.x - e.x;
+      const dy = player.y - e.y;
+      const len = Math.hypot(dx, dy) || 1;
+      e.vx += (dx / len) * CS.DIVE_HOMING * 60 * dt;
+      e.vy += (dy / len) * CS.DIVE_HOMING * 60 * dt;
+      const vl = Math.hypot(e.vx, e.vy) || 1;
+      e.vx = (e.vx / vl) * CS.DIVE_SPEED;
+      e.vy = (e.vy / vl) * CS.DIVE_SPEED;
+      e.x += e.vx * 60 * dt;
+      e.y += e.vy * 60 * dt;
+      if (e.y > H + 40 || e.x < -40 || e.x > W + 40) e.hit = true;
+    });
 
     enemyTick += 60 * dt;
     if (enemyTick >= 45) {
       enemyTick = 0;
       let edge = false;
-      alive.forEach(e => {
+      formation.forEach(e => {
         e.x += CS.ENEMY_DX * enemyDir;
         if (e.x <= CS.ENEMY_W / 2 + 4 || e.x >= W - CS.ENEMY_W / 2 - 4) edge = true;
       });
       if (edge) {
         enemyDir *= -1;
-        alive.forEach(e => { e.y += CS.ENEMY_DY; });
+        formation.forEach(e => { e.y += CS.ENEMY_DY; });
       }
     }
 
@@ -422,10 +666,53 @@
           const colors = ['#a78bfa', '#c084fc', '#f472b6'];
           addParticles(e.x, e.y, colors[e.type % 3]);
           score += (e.type + 1) * 50;
+          if (e.diving) score += 80;
         }
       });
     });
     bullets = bullets.filter(b => !b.dead);
+
+    const inv = now < invincibleUntil;
+    if (!inv) {
+      enemyMissiles.forEach(m => {
+        if (hitTest(
+          { x: player.x - CS.PLAYER_W / 2, y: player.y - CS.PLAYER_H / 2 },
+          { x: m.x - CS.MISSILE_R, y: m.y - CS.MISSILE_R },
+          CS.PLAYER_W, CS.PLAYER_H,
+          CS.MISSILE_R * 2, CS.MISSILE_R * 2
+        )) {
+          m.dead = true;
+          addParticles(m.x, m.y, '#f472b6');
+          lives--;
+          invincibleUntil = now + CS.INVINCIBLE_MS;
+          if (lives <= 0) { gameOver(); return; }
+        }
+      });
+      enemyMissiles = enemyMissiles.filter(m => !m.dead);
+      alive.filter(e => e.diving).forEach(e => {
+        if (hitTest(
+          { x: player.x - CS.PLAYER_W / 2, y: player.y - CS.PLAYER_H / 2 },
+          { x: e.x - CS.ENEMY_W / 2, y: e.y - CS.ENEMY_H / 2 },
+          CS.PLAYER_W, CS.PLAYER_H,
+          CS.ENEMY_W, CS.ENEMY_H
+        )) {
+          e.hit = true;
+          addParticles(e.x, e.y, '#f472b6');
+          lives--;
+          invincibleUntil = now + CS.INVINCIBLE_MS;
+          if (lives <= 0) { gameOver(); return; }
+        }
+      });
+      formation.forEach(e => {
+        if (e.y + CS.ENEMY_H / 2 >= player.y - CS.PLAYER_H / 2 - 5) {
+          e.hit = true;
+          addParticles(e.x, e.y, '#f472b6');
+          lives--;
+          invincibleUntil = now + CS.INVINCIBLE_MS;
+          if (lives <= 0) gameOver();
+        }
+      });
+    }
 
     particles.forEach(p => {
       p.x += p.vx;
@@ -434,15 +721,9 @@
     });
     particles = particles.filter(p => p.life > 0);
 
-    alive.forEach(e => {
-      if (e.y + CS.ENEMY_H / 2 >= player.y - CS.PLAYER_H / 2 - 5) {
-        gameOver();
-        return;
-      }
-    });
-
-    drawPlayer();
+    drawPlayer(now);
     bullets.forEach(drawBullet);
+    enemyMissiles.forEach(drawEnemyMissile);
     enemies.forEach(drawEnemy);
     drawParticles();
     updateHud();
@@ -450,13 +731,12 @@
     raf = requestAnimationFrame(loop);
   }
 
-  const BULLET_SPEED = -12;
   const keys = {};
 
   function tryShoot() {
     if (state !== 'play') return;
     const now = performance.now();
-    if (now - lastShot < 1000 / 12) return;
+    if (now - lastShot < 1000 / effectiveFireRate()) return;
     lastShot = now;
     bullets.push({
       x: player.x,
@@ -514,21 +794,30 @@
     resize();
     state = 'play';
     score = 0;
+    gold = 0;
     wave = 1;
     lives = 3;
+    maxLives = 5;
+    upgrades = { fireRate: 0, bulletSpeed: 0, moveSpeed: 0 };
     player.x = W / 2;
     player.y = H - 56;
     bullets = [];
     particles = [];
+    invincibleUntil = 0;
+    const t = performance.now();
+    lastEnemyShoot = lastDiveSpawn = t;
     spawnWave();
     startOverlay.classList.add('hidden');
     gameOverOverlay.classList.add('hidden');
-    lastFrame = lastShot = performance.now();
+    shopOverlay.classList.add('hidden');
+    lastFrame = lastShot = t;
+    updateHud();
     raf = requestAnimationFrame(loop);
   }
 
   startBtn.addEventListener('click', start);
   restartBtn.addEventListener('click', start);
+  shopNextBtn.addEventListener('click', closeShopAndNextWave);
 })();
   </script>
 </body>
